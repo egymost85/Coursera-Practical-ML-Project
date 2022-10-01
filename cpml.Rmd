@@ -1,0 +1,278 @@
+---
+title: "Coursera Practical ML Project"
+author: "Mostafa Hussien"
+date: '2022-10-01'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Libraries
+
+Lets load the required libraries
+
+```{r, message=FALSE, warning=FALSE}
+load_libraries <- function(){
+  library(caret); library(kernlab); library(ISLR); library(ggplot2); library(Hmisc); library(tidyverse)
+  library(GGally); require(splines); library(AppliedPredictiveModeling); library(rattle)
+  library(rpart); library(randomForest); library(gbm); library(klaR)
+  library(quantmod); library(forecast); library(elasticnet); library(e1071)
+}
+
+load_libraries()
+```
+
+
+## Data Import
+
+The data can be downloaded and obtained as follows
+
+
+```{r, cache=TRUE}
+#training data
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "training.csv", method = "curl")
+#test data
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "testing.csv", method = "curl")
+pml.train <- read.csv('training.csv', na.strings = c('NA',''))
+pml.test <- read.csv('testing.csv')
+```
+
+
+## Train Data Investigation
+
+Lets investigate the train dataset and transform the 'classe' into factor variable
+
+```{r}
+#for safety take copy
+pml.train.1 <- pml.train
+pml.test.1 <- pml.test
+
+#transform
+pml.train.1$classe <- as.factor(pml.train.1$classe)
+
+#check column names
+pml.train.1 %>% names()
+```
+
+It looks like the first 7 columns are useless in predicting, lets remove them!
+
+```{r}
+#for safety take copy
+pml.train.1 <- pml.train.1[,-c(1:7)]
+```
+
+What about NAs? Are there any? Lest find out!
+
+```{r}
+#for safety take copy
+pml.train.1 %>% str()
+```
+
+Yes there are NAs indeed.
+Lets get rid of them
+
+```{r}
+#dimensions before removing NA columns
+pml.train.1 %>% dim()
+
+#extract column names that has more than 90% NAs
+tibble(
+  colmn= names(
+    sapply(pml.train.1, function(x) {mean(is.na(x))})
+    ),
+  sna= sapply(pml.train.1, function(x) {sum(is.na(x))}),
+  mna= sapply(pml.train.1, function(x) {mean(is.na(x))})
+) %>%
+  arrange(desc(mna)) %>%
+  filter(mna<0.9) %>% 
+  pluck('colmn') -> pml.non.na.colmn
+
+
+#remove na columns
+pml.train.1 <- pml.train.1[,pml.non.na.colmn]
+
+#dimensions after
+pml.train.1 %>% dim()
+```
+
+Wow!!
+There were 100 columns with more than 90% NAs!
+
+## Data Splitting
+
+So, for the train dataset; this is going to be split into training and testing datasets
+
+While for the test dataset, this is going to be left for the final prediction step after all the modeling 
+
+```{r}
+pml.train.split <- createDataPartition(y=pml.train.1$classe, p=0.75, list = F)
+
+pml.train.2 <- pml.train.1[pml.train.split,]
+pml.test.2 <- pml.train.1[-pml.train.split,]
+
+#dimensions
+pml.train.2 %>% dim()
+pml.test.2 %>% dim()
+```
+
+
+## Preparing Final Testing Data Accordingly
+
+What was done on the training data should be done on the final test data
+
+```{r}
+pml.test.final  <- pml.test[,colnames(pml.test) %in% pml.non.na.colmn]
+pml.test.final %>% dim()
+```
+
+
+
+## Modeling Training Data
+
+What is the kind of response?
+
+```{r}
+pml.train.2$classe %>% unique()
+```
+
+Therefore; multinomial
+
+Hence, the following algorithms will be used
+
+* Tree 
+* Random Forest
+* LDA
+* Naive Bayes
+* Bagging
+* SVM
+
+```{r, cache=TRUE}
+#tree
+pml.fit.tree <- train(classe~., method='rpart', data= pml.train.2)
+
+#rf
+pml.fit.rf <- randomForest(classe~., data= pml.train.2)
+
+#lda
+pml.fit.lda <- train(classe~., method='lda', data= pml.train.2)
+
+#nb
+pml.fit.nb <- naiveBayes(classe~., data= pml.train.2)
+
+#bagging
+pml.fit.bag <- bag(pml.train.2[,-53],
+                   pml.train.2[,53],
+                   B=10,
+                   bagControl = bagControl(fit= ctreeBag$fit,
+                                           predict= ctreeBag$pred,
+                                           aggregate = ctreeBag$aggregate)
+                   )
+
+#svm
+pml.fit.svm <- svm(classe~., data= pml.train.2)
+```
+
+
+## Training Prediction
+
+Lets predict on the training data to obtain training accuracy metrics
+
+```{r}
+#tree
+pml.pred1.tree <- predict(pml.fit.tree, pml.test.2)
+
+#rf
+pml.pred1.rf <- predict(pml.fit.rf, pml.test.2)
+
+#lda
+pml.pred1.lda <- predict(pml.fit.lda, pml.test.2)
+
+#nb
+pml.pred1.nb <- predict(pml.fit.nb, pml.test.2)
+
+#bagging
+pml.pred1.bagging <- predict(pml.fit.bag, pml.test.2)
+
+#svm
+pml.pred1.svm <- predict(pml.fit.svm, pml.test.2)
+```
+
+
+
+## Training Accuracy
+
+Lets arrange the training accuracy in a tibble arranged by value
+
+```{r}
+tr_acc <- tibble(
+  Algo= (c('Tree', 'RF', 'LDA', 'NB', 'Bagging', 
+           #'Boosting', 'KMeans', 
+           'SVM')),
+  Set= 'Train',
+  Accuracy= c(
+    confusionMatrix(pml.train.2$classe, predict(pml.fit.tree))$overall['Accuracy'],
+    confusionMatrix(pml.train.2$classe, predict(pml.fit.rf))$overall['Accuracy'],
+    confusionMatrix(pml.train.2$classe, predict(pml.fit.lda))$overall['Accuracy'],
+    confusionMatrix(pml.train.2$classe, predict(pml.fit.nb, pml.train.2))$overall['Accuracy'],
+    confusionMatrix(pml.train.2$classe, predict(pml.fit.bag,pml.train.2))$overall['Accuracy'],
+    confusionMatrix(pml.train.2$classe, predict(pml.fit.svm))$overall['Accuracy']
+  )
+)
+
+tr_acc %>% arrange(desc(Accuracy))
+```
+
+RF ROCKS !!!
+
+## Testing Accuracy
+
+Lets check the testing accuracy
+
+```{r, cache=TRUE}
+tst_acc <- tibble(
+  Algo= (c('Tree', 'RF', 'LDA', 'NB', 'Bagging', 'SVM')),
+  Set= 'Test',
+  Accuracy= c(
+    confusionMatrix(pml.test.2$classe, predict(pml.fit.tree, pml.test.2))$overall['Accuracy'],
+    confusionMatrix(pml.test.2$classe, predict(pml.fit.rf, pml.test.2))$overall['Accuracy'],
+    confusionMatrix(pml.test.2$classe, predict(pml.fit.lda, pml.test.2))$overall['Accuracy'],
+    confusionMatrix(pml.test.2$classe, predict(pml.fit.nb, pml.test.2))$overall['Accuracy'],
+    confusionMatrix(pml.test.2$classe, predict(pml.fit.bag,pml.test.2))$overall['Accuracy'],
+    confusionMatrix(pml.test.2$classe, predict(pml.fit.svm, pml.test.2))$overall['Accuracy']
+  )
+)
+
+tst_acc %>% arrange(desc(Accuracy))
+```
+
+RF still ROCKS !!
+
+
+
+## Visual Summary of Accuracy
+
+How do the models perform? Lets see a visual
+
+```{r}
+acc_tbl <- bind_rows(
+  tr_acc,
+  tst_acc
+)
+
+acc_tbl %>%
+  ggplot(aes(x=Algo, y=Accuracy, fill= Set)) + 
+  geom_col(position='dodge')
+```
+
+
+
+## Predicting 
+
+Indeed we will predict now using Random Forest
+
+```{r}
+predict(pml.fit.rf, pml.test.1)
+```
+
